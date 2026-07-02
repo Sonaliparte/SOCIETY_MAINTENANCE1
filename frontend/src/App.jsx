@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 
 import Sidebar from './components/Sidebar';
 import Navbar from './components/Navbar';
+import LandingPage from './landing/LandingPage';
 
 import Login from './pages/Login';
 import AdminDashboard from './pages/AdminDashboard';
@@ -125,6 +126,18 @@ const DashboardLayout = () => {
   );
 };
 
+const HomeGate = () => {
+  const { isAuthenticated, loading } = useAuth();
+  
+  if (loading) return <LoadingScreen />;
+  
+  if (isAuthenticated) {
+    return <DashboardLayout />;
+  }
+  
+  return <LandingPage />;
+};
+
 const AppContent = () => (
   <Routes>
     <Route
@@ -136,6 +149,8 @@ const AppContent = () => (
       }
     />
     <Route path="/payment/mock-checkout" element={<MockCheckout />} />
+
+    <Route path="/" element={<HomeGate />} />
 
     <Route
       path="/*"
