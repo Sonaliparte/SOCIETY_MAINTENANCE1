@@ -3,7 +3,7 @@ import React, { useState } from "react";
 const Contact = () => {
   const [formData, setFormData] = useState({
     name: '',
-    flat_no: '',
+    building_name: '',
     email: '',
     message: ''
   });
@@ -17,21 +17,22 @@ const Contact = () => {
     console.log("Submit clicked", formData);
   
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/contact`, {
+      const res = await fetch(`https://formsubmit.co/ajax/sonaliparte45@gmail.com`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
         body: JSON.stringify(formData)
       });
   
       const data = await res.json();
-      console.log('Response from server:', data);
-      alert(data.message || "Form submitted!");
+      console.log('Response from FormSubmit:', data);
+      alert("Message sent successfully!");
   
       setFormData({
         name: '',
-        flat_no: '',
+        building_name: '',
         email: '',
         message: ''
       });
@@ -57,13 +58,13 @@ const Contact = () => {
           required
         />
 
-        <label style={styles.label}>Flat No.:</label>
+        <label style={styles.label}>Building Name:</label>
         <input
           type="text"
-          name="flat_no"
+          name="building_name"
           style={styles.input}
-          placeholder="Enter your flat number"
-          value={formData.flat_no}
+          placeholder="Enter your building name"
+          value={formData.building_name}
           onChange={handleChange}
           required
         />
