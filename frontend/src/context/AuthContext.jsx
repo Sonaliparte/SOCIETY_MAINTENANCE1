@@ -19,13 +19,27 @@ async function fetchProfile(userId) {
 }
 
 function buildUser(authUser, profile) {
+  let localData = {};
+  try {
+    const stored = localStorage.getItem('profile_' + authUser.id);
+    if (stored) {
+      localData = JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error("Failed to parse local profile data", e);
+  }
+
   return {
     id: authUser.id,
-    email: authUser.email,
-    name: profile.name,
-    phone: profile.phone,
+    email: localData.email || authUser.email,
+    name: localData.name || profile.name,
+    phone: localData.phone || profile.phone,
     role: profile.role,
     societyId: profile.society_id,
+    unit: localData.unit || '',
+    photo: localData.photo || null,
+    notificationPreferences: localData.notificationPreferences || { email: true, sms: false },
+    moveInDate: localData.moveInDate || '',
   };
 }
 
@@ -122,7 +136,7 @@ export const AuthProvider = ({ children }) => {
     if (!data.user) throw new Error('Registration failed — check email confirmation settings.');
 
     if (!data.session) {
-      throw new Error('Registration successful! Please check your email to verify your account before logging in.');
+      return { needsEmailVerification: true };
     }
 
     await new Promise((r) => setTimeout(r, 1000));
@@ -154,6 +168,13 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  const resetPassword = async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) throw new Error(error.message);
+  };
+
   const refreshProfile = async () => {
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (authUser) {
@@ -166,13 +187,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const updateProfileLocal = (updates) => {
+    if (!user) return;
+    
+    let localData = {};
+    try {
+      const stored = localStorage.getItem('profile_' + user.id);
+      if (stored) {
+        localData = JSON.parse(stored);
+      }
+    } catch (e) {}
+
+    const newData = { ...localData, ...updates };
+    localStorage.setItem('profile_' + user.id, JSON.stringify(newData));
+
+    // Update the in-memory user state immediately
+    setUser(prev => ({
+      ...prev,
+      ...updates
+    }));
+  };
+
   const value = {
     user,
     loading,
     login,
     register,
     logout,
+    resetPassword,
     refreshProfile,
+    updateProfileLocal,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'super_admin',
     isResident: user?.role === 'resident',

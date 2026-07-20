@@ -15,6 +15,13 @@ import ExpenseTracker from './pages/ExpenseTracker';
 import NoticeBoard from './pages/NoticeBoard';
 import Complaints from './pages/Complaints';
 import MockCheckout from './pages/MockCheckout';
+import SecurityDashboard from './pages/SecurityDashboard';
+import PaymentCheckout from './pages/PaymentCheckout';
+import PaymentSuccess from './pages/PaymentSuccess';
+import MaintenanceStatus from './pages/MaintenanceStatus';
+import ReceiptsLedger from './pages/ReceiptsLedger';
+import PaymentHistory from './pages/PaymentHistory';
+import UserProfile from './pages/UserProfile';
 
 const LoadingScreen = () => (
   <div className="flex h-screen items-center justify-center bg-slate-50">
@@ -70,7 +77,9 @@ const DashboardLayout = () => {
             <Route
               path="/"
               element={
-                user.role === 'super_admin' ? <AdminDashboard /> : <ResidentDashboard />
+                user.role === 'super_admin' ? <AdminDashboard /> :
+                user.role === 'security' ? <SecurityDashboard /> :
+                <ResidentDashboard />
               }
             />
             <Route path="/notices" element={<NoticeBoard />} />
@@ -110,10 +119,34 @@ const DashboardLayout = () => {
               }
             />
             <Route
+              path="/maintenance"
+              element={
+                <ProtectedRoute allowedRoles={['resident']}>
+                  <MaintenanceStatus />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/receipts"
               element={
                 <ProtectedRoute allowedRoles={['resident']}>
-                  <ResidentDashboard />
+                  <ReceiptsLedger />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/payment-history"
+              element={
+                <ProtectedRoute allowedRoles={['resident']}>
+                  <PaymentHistory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute>
+                  <UserProfile />
                 </ProtectedRoute>
               }
             />
@@ -149,6 +182,22 @@ const AppContent = () => (
       }
     />
     <Route path="/payment/mock-checkout" element={<MockCheckout />} />
+    <Route
+      path="/payment/checkout"
+      element={
+        <ProtectedRoute>
+          <PaymentCheckout />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/payment/success"
+      element={
+        <ProtectedRoute>
+          <PaymentSuccess />
+        </ProtectedRoute>
+      }
+    />
 
     <Route path="/" element={<HomeGate />} />
 

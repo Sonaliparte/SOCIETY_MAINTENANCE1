@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Building2, Mail, Lock, User as UserIcon, Phone, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Phone, ShieldCheck, ArrowRight, Eye, EyeOff, CheckCircle } from 'lucide-react';
 
 const Login = () => {
-  const { login, register } = useAuth();
+  const { login, register, resetPassword } = useAuth();
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [role, setRole] = useState('resident');
@@ -18,22 +18,56 @@ const Login = () => {
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const handleResetPassword = async () => {
+    if (!email) {
+      setError('Please enter your email address first.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setSuccessMsg('');
+    try {
+      await resetPassword(email);
+      setSuccessMsg('Password reset link sent to your email.');
+    } catch (err) {
+      setError(typeof err === 'string' ? err : err.message || 'Failed to send reset link.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+
     setLoading(true);
 
     try {
       if (isLogin) {
         await login(email, password);
+        navigate('/', { replace: true });
       } else {
-        await register(name, email, phone, password, role, {
+        const result = await register(name, email, phone, password, role, {
           name: societyName,
           address: societyAddress,
         });
+
+        if (result && result.needsEmailVerification) {
+          setSuccessMsg('Registration successful! Please check your email to verify your account before logging in.');
+          setIsLogin(true);
+        } else {
+          navigate('/', { replace: true });
+        }
       }
-      navigate('/', { replace: true });
     } catch (err) {
       setError(typeof err === 'string' ? err : err.message || 'Authentication failed.');
     } finally {
@@ -48,11 +82,11 @@ const Login = () => {
 
       <div className="z-10 w-full max-w-md animate-slide-in">
         <div className="flex flex-col items-center mb-8">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-600 shadow-lg shadow-sky-500/25 ring-4 ring-sky-950 mb-3">
-            <Building2 className="h-6 w-6 text-white" />
+          <div className="mb-3">
+            <img src="/securix-logo.png" alt="SecuriX Logo" className="h-16 w-auto drop-shadow-[0_0_15px_rgba(0,229,255,0.3)]" />
           </div>
-          <h1 className="font-sans font-bold text-2xl text-white tracking-tight">
-            SOCIETY<span className="text-sky-500"> MAINTENANCE</span>
+          <h1 className="font-sans font-bold text-3xl text-white tracking-tight">
+            SECURI<span className="text-sky-500">X</span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">Powered by Supabase Auth</p>
         </div>
@@ -64,23 +98,28 @@ const Login = () => {
           </div>
         )}
 
+        {successMsg && (
+          <div className="mb-6 p-4 rounded-xl border border-emerald-900/50 bg-emerald-950/20 text-emerald-400 text-sm flex items-start gap-2.5">
+            <CheckCircle className="h-5 w-5 shrink-0 text-emerald-500" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
         <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl backdrop-blur-md">
           <div className="flex rounded-lg bg-slate-950 p-1 mb-6">
             <button
               type="button"
-              onClick={() => { setIsLogin(true); setError(''); }}
-              className={`flex-1 py-2 text-center text-sm font-medium rounded-md transition-all duration-200 ${
-                isLogin ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={() => { setIsLogin(true); setError(''); setSuccessMsg(''); }}
+              className={`flex-1 py-2 text-center text-sm font-medium rounded-md transition-all duration-200 ${isLogin ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
             >
               Sign In
             </button>
             <button
               type="button"
-              onClick={() => { setIsLogin(false); setError(''); }}
-              className={`flex-1 py-2 text-center text-sm font-medium rounded-md transition-all duration-200 ${
-                !isLogin ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={() => { setIsLogin(false); setError(''); setSuccessMsg(''); }}
+              className={`flex-1 py-2 text-center text-sm font-medium rounded-md transition-all duration-200 ${!isLogin ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
             >
               Join Us
             </button>
@@ -95,11 +134,10 @@ const Login = () => {
                     <button
                       type="button"
                       onClick={() => setRole('resident')}
-                      className={`flex-1 py-2 px-3 border rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                        role === 'resident'
+                      className={`flex-1 py-2 px-3 border rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${role === 'resident'
                           ? 'border-sky-500 bg-sky-950/30 text-sky-400'
                           : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700'
-                      }`}
+                        }`}
                     >
                       <UserIcon className="h-3.5 w-3.5" />
                       Resident
@@ -107,11 +145,10 @@ const Login = () => {
                     <button
                       type="button"
                       onClick={() => setRole('super_admin')}
-                      className={`flex-1 py-2 px-3 border rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                        role === 'super_admin'
+                      className={`flex-1 py-2 px-3 border rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${role === 'super_admin'
                           ? 'border-sky-500 bg-sky-950/30 text-sky-400'
                           : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700'
-                      }`}
+                        }`}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" />
                       Secretary
@@ -191,14 +228,32 @@ const Login = () => {
               <div className="relative">
                 <Lock className="absolute left-3 top-3.5 h-4.5 w-4.5 text-slate-500" />
                 <input
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-lg border border-slate-800 bg-slate-950 py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:border-sky-500 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-800 bg-slate-950 py-2.5 pl-10 pr-12 text-sm text-white placeholder-slate-600 focus:border-sky-500 focus:outline-none"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-300 focus:outline-none"
+                >
+                  {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                </button>
               </div>
+              {isLogin && (
+                <div className="flex justify-end mt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetPassword}
+                    className="text-xs text-sky-500 hover:text-sky-400 font-medium transition-colors"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
+              )}
             </div>
 
             <button

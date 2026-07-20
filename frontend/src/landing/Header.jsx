@@ -18,7 +18,6 @@ import MenuIcon from '@mui/icons-material/Menu';
 import { useTheme } from '@mui/material/styles';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import sgsLogo from '../../public/sgslogo.jpg';
 
 
 const Header = () => {
@@ -92,17 +91,9 @@ const Header = () => {
       <AppBar position="static" sx={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', boxShadow: 'none' }}>
         <Toolbar sx={{ justifyContent: 'space-between' }}>
           <Box display="flex" alignItems="center" gap={2}>
-            <img
-              src={sgsLogo}
-              alt="SGS Logo"
-              style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover' }}
-              onError={(e) => {
-                e.target.onerror = null;
-                e.target.src = 'https://placehold.co/60x60?text=Logo'; // Fallback if image fails to load
-              }}
-            />
-            <Typography variant="h6" sx={{ color: '#0f172a', fontWeight: 'bold' }}>
-              SHREE GURUDATTA SADAN
+            <img src="/securix-logo.png" alt="SecuriX Logo" style={{ height: '40px', width: 'auto' }} />
+            <Typography variant="h6" sx={{ color: '#0f172a', fontWeight: 'bold', letterSpacing: '1px' }}>
+              SECURI<span style={{ color: '#0066ff' }}>X</span>
             </Typography>
           </Box>
 
@@ -146,7 +137,7 @@ const Header = () => {
                     variant="contained"
                     onClick={handleSignOut}
                     sx={{
-                      backgroundColor: '#ef4444', 
+                      backgroundColor: '#ef4444',
                       borderRadius: 2,
                       textTransform: 'none',
                       px: 3,

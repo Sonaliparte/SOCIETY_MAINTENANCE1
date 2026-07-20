@@ -1,16 +1,19 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { 
-  LayoutDashboard, 
-  Building2, 
-  Receipt, 
-  CreditCard, 
-  FileText, 
-  Megaphone, 
-  Wrench, 
+import {
+  LayoutDashboard,
+  Receipt,
+  CreditCard,
+  FileText,
+  Megaphone,
+  Wrench,
   LogOut,
-  X
+  X,
+  Shield,
+  ShieldAlert,
+  History,
+  Wallet,
 } from 'lucide-react';
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
@@ -23,7 +26,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   const adminLinks = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/flats', label: 'Flats & Wings', icon: Building2 },
+    { to: '/flats', label: 'Flats & Wings', icon: Shield },
     { to: '/billing', label: 'Billing Manager', icon: Receipt },
     { to: '/expenses', label: 'Expense Tracker', icon: CreditCard },
     { to: '/notices', label: 'Notice Board', icon: Megaphone },
@@ -32,19 +35,26 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   const residentLinks = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/bills', label: 'Pay Bills', icon: CreditCard },
+    { to: '/maintenance', label: 'Maintenance', icon: Wallet },
     { to: '/receipts', label: 'Receipts Ledger', icon: FileText },
+    { to: '/payment-history', label: 'Payment History', icon: History },
     { to: '/notices', label: 'Notice Board', icon: Megaphone },
     { to: '/complaints', label: 'Complaints', icon: Wrench },
   ];
 
-  const links = isAdmin ? adminLinks : residentLinks;
+  const securityLinks = [
+    { to: '/', label: 'Guard Panel', icon: ShieldAlert },
+  ];
+
+  const links = user?.role === 'super_admin' ? adminLinks :
+                user?.role === 'security' ? securityLinks :
+                residentLinks;
 
   return (
     <>
       {/* Backdrop for mobile */}
       {isOpen && (
-        <div 
+        <div
           className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm lg:hidden"
           onClick={toggleSidebar}
         />
@@ -58,12 +68,12 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         {/* Sidebar Header */}
         <div className="flex h-16 items-center justify-between px-6 border-b border-slate-800">
           <div className="flex items-center gap-2">
-            <Building2 className="h-6 w-6 text-sky-400" />
+            <img src="/securix-logo.png" alt="SecuriX Logo" className="h-7 w-auto" />
             <span className="font-sans font-bold text-lg text-white leading-tight">
-              SOCIETY<span className="text-sky-400"> MANAGER</span>
+              SECURI<span className="text-sky-400">X</span>
             </span>
           </div>
-          <button 
+          <button
             onClick={toggleSidebar}
             className="rounded p-1 hover:bg-slate-800 hover:text-white lg:hidden"
           >
@@ -71,14 +81,6 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           </button>
         </div>
 
-        {/* User Card info */}
-        <div className="p-6 border-b border-slate-800/60 bg-slate-950/40">
-          <div className="text-sm font-semibold text-white truncate">{user?.name}</div>
-          <div className="text-xs text-slate-400 mt-0.5 truncate">{user?.email}</div>
-          <div className="mt-2 inline-flex items-center rounded-full bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-sky-400 border border-sky-900/35">
-            {user?.role === 'super_admin' ? 'Secretary' : 'Resident'}
-          </div>
-        </div>
 
         {/* Nav Links */}
         <nav className="flex-1 space-y-1.5 px-4 py-6 overflow-y-auto">
@@ -91,8 +93,8 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                 onClick={() => { if (window.innerWidth < 1024) toggleSidebar(); }}
                 className={({ isActive }) => `
                   flex items-center gap-3.5 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200
-                  ${isActive 
-                    ? 'bg-sky-600 text-white font-semibold shadow-lg shadow-sky-950/30' 
+                  ${isActive
+                    ? 'bg-sky-600 text-white font-semibold shadow-lg shadow-sky-950/30'
                     : 'hover:bg-slate-800 hover:text-white text-slate-400'}
                 `}
               >

@@ -41,13 +41,10 @@ serve(async (req) => {
     }
 
     // Parse request body
-    const { billId, paymentMode } = await req.json();
-    if (!billId) {
-      return new Response(JSON.stringify({ error: "Bill ID is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const body = await req.json();
+    let billIds = body.billIds || (body.billId ? [body.billId] : []);
+    const advanceMonths = body.advanceMonths || [];
+    const paymentMode = body.paymentMode || 'card';
 
     // Fetch bill details bypassing RLS via Admin Client
     const supabaseAdmin = createClient(
@@ -55,7 +52,63 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
-    const { data: bill, error: billError } = await supabaseAdmin
+    if (advanceMonths.length > 0) {
+      // Find the flat owned by this user
+      const { data: flat, error: flatErr } = await supabaseAdmin
+        .from("flats")
+        .select("id, maintenance_amount")
+        .eq("owner_id", user.id)
+        .maybeSingle();
+
+      if (flatErr || !flat) {
+        return new Response(JSON.stringify({ error: "No flat found owned by this resident for advance billing" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      for (const month of advanceMonths) {
+        const { data: existingBill } = await supabaseAdmin
+          .from("bills")
+          .select("id, status")
+          .eq("flat_id", flat.id)
+          .eq("billing_month", month)
+          .maybeSingle();
+
+        if (existingBill) {
+          if (existingBill.status !== 'paid' && !billIds.includes(existingBill.id)) {
+            billIds.push(existingBill.id);
+          }
+        } else {
+          // Insert new bill
+          const { data: newBill, error: insertErr } = await supabaseAdmin
+            .from("bills")
+            .insert({
+              flat_id: flat.id,
+              billing_month: month,
+              amount: flat.maintenance_amount,
+              penalty: 0,
+              due_date: `${month}-10`,
+              status: 'pending'
+            })
+            .select()
+            .single();
+
+          if (!insertErr && newBill) {
+            billIds.push(newBill.id);
+          }
+        }
+      }
+    }
+
+    if (billIds.length === 0) {
+      return new Response(JSON.stringify({ error: "Bill ID(s) or advance months required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: bills, error: billError } = await supabaseAdmin
       .from("bills")
       .select(`
         id,
@@ -70,31 +123,33 @@ serve(async (req) => {
           society:societies(name)
         )
       `)
-      .eq("id", billId)
-      .single();
+      .in("id", billIds);
 
-    if (billError || !bill) {
-      return new Response(JSON.stringify({ error: "Bill not found" }), {
+    if (billError || !bills || bills.length === 0) {
+      return new Response(JSON.stringify({ error: "Associated bills not found" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    if (bill.status === "paid") {
-      return new Response(JSON.stringify({ error: "This bill has already been settled" }), {
+    const anyPaid = bills.some(b => b.status === "paid");
+    if (anyPaid) {
+      return new Response(JSON.stringify({ error: "One or more bills have already been settled" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const totalAmount = Number(bill.amount) + Number(bill.penalty);
+    const totalAmount = bills.reduce((sum, b) => sum + Number(b.amount) + Number(b.penalty), 0);
     const mockPayments = Deno.env.get("MOCK_PAYMENTS") === "true";
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+
+    const billIdsStr = bills.map(b => b.id).join(",");
 
     if (mockPayments || !stripeSecretKey || stripeSecretKey.startsWith("sk_test_mock")) {
       // Mock checkout flow
       const mockSessionId = `mock_session_${Date.now()}`;
-      const mockUrl = `http://localhost:5173/payment/mock-checkout?session_id=${mockSessionId}&bill_id=${bill.id}&amount=${totalAmount}`;
+      const mockUrl = `http://localhost:5173/payment/mock-checkout?session_id=${mockSessionId}&bill_ids=${billIdsStr}&amount=${totalAmount}`;
       
       return new Response(JSON.stringify({
         sessionId: mockSessionId,
@@ -111,31 +166,32 @@ serve(async (req) => {
       apiVersion: "2023-10-16",
     });
 
-    const societyName = bill.flat?.society?.name || "Society Manager";
-    const wing = bill.flat?.wing || "";
-    const flatNo = bill.flat?.flat_number || "";
+    const firstBill = bills[0];
+    const societyName = firstBill.flat?.society?.name || "Society Manager";
+    const wing = firstBill.flat?.wing || "";
+    const flatNo = firstBill.flat?.flat_number || "";
+
+    const lineItems = bills.map(b => ({
+      price_data: {
+        currency: "inr",
+        product_data: {
+          name: `Maintenance Bill - ${b.billing_month}`,
+          description: `Wing ${b.flat?.wing || ""}, Flat ${b.flat?.flat_number || ""} - ${societyName}`,
+        },
+        unit_amount: Math.round((Number(b.amount) + Number(b.penalty)) * 100),
+      },
+      quantity: 1,
+    }));
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "inr",
-            product_data: {
-              name: `Maintenance Bill - ${bill.billing_month}`,
-              description: `Wing ${wing}, Flat ${flatNo} - ${societyName}`,
-            },
-            unit_amount: Math.round(totalAmount * 100), // Stripe expects amounts in cents/paise
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: lineItems,
       mode: "payment",
-      success_url: `http://localhost:5173/payment/success?session_id={CHECKOUT_SESSION_ID}&bill_id=${bill.id}`,
-      cancel_url: `http://localhost:5173/payment/cancel?bill_id=${bill.id}`,
+      success_url: `http://localhost:5173/payment/success?session_id={CHECKOUT_SESSION_ID}&bill_ids=${billIdsStr}`,
+      cancel_url: `http://localhost:5173/payment/cancel?bill_ids=${billIdsStr}`,
       metadata: {
-        billId: bill.id,
-        flatId: bill.flat?.id,
+        billIds: billIdsStr,
+        flatId: firstBill.flat?.id,
         ownerId: user.id
       }
     });

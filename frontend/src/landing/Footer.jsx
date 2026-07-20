@@ -4,7 +4,7 @@ const Footer = () => {
   return (
     <footer style={styles.footer}>
       <div style={styles.container}>
-        <p style={styles.text}>© {new Date().getFullYear()} Shree Gurudatta Sadan Co.Hsg. All rights reserved.</p>
+        <p style={styles.text}>© {new Date().getFullYear()} SECURIX. All rights reserved.</p>
         <p style={styles.text}>Designed by You ❤️</p>
       </div>
     </footer>

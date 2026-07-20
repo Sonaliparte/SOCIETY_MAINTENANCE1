@@ -283,9 +283,11 @@ export async function getPaymentHistory() {
   }));
 }
 
-export async function createPaymentOrder(billId, paymentMode = 'card') {
+export async function createPaymentOrder(billIds, paymentMode = 'card') {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
+
+  const ids = Array.isArray(billIds) ? billIds : [billIds];
 
   const response = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment-order`,
@@ -295,7 +297,7 @@ export async function createPaymentOrder(billId, paymentMode = 'card') {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ billId, paymentMode }),
+      body: JSON.stringify({ billIds: ids, paymentMode }),
     }
   );
 
@@ -304,9 +306,11 @@ export async function createPaymentOrder(billId, paymentMode = 'card') {
   return result;
 }
 
-export async function verifyPayment(sessionId, billId, paymentMode = 'card') {
+export async function verifyPayment(sessionId, billIds, paymentMode = 'card') {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
+
+  const ids = Array.isArray(billIds) ? billIds : [billIds];
 
   const response = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-payment`,
@@ -316,7 +320,7 @@ export async function verifyPayment(sessionId, billId, paymentMode = 'card') {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ sessionId, billId, paymentMode }),
+      body: JSON.stringify({ sessionId, billIds: ids, paymentMode }),
     }
   );
 
@@ -496,3 +500,543 @@ export async function updateComplaintStatus(id, status) {
   if (error) throw error;
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// Security & Visitor Management Services
+// ---------------------------------------------------------------------------
+
+export async function uploadVisitorPhoto(file) {
+  if (!file) return null;
+  const ext = file.name.split('.').pop();
+  const path = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${ext}`;
+  const { error: uploadError } = await supabase.storage
+    .from('visitor-photos')
+    .upload(path, file);
+  if (uploadError) throw uploadError;
+
+  const { data: urlData } = supabase.storage.from('visitor-photos').getPublicUrl(path);
+  return urlData.publicUrl;
+}
+
+// Visitors
+export async function getVisitors(flatId) {
+  let query = supabase
+    .from('visitors')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .order('entry_time', { ascending: false });
+
+  if (flatId) {
+    query = query.eq('flat_id', flatId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function getSocietyVisitors(societyId) {
+  const { data, error } = await supabase
+    .from('visitors')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .eq('society_id', societyId)
+    .order('entry_time', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function logVisitorEntry(visitorData) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const loggedBy = user ? user.id : null;
+
+  const { data, error } = await supabase
+    .from('visitors')
+    .insert({
+      society_id: visitorData.societyId,
+      flat_id: visitorData.flatId,
+      visitor_name: visitorData.visitorName,
+      phone: visitorData.phone,
+      purpose: visitorData.purpose,
+      vehicle_number: visitorData.vehicleNumber || null,
+      photo_url: visitorData.photoUrl || null,
+      status: 'inside',
+      logged_by: loggedBy
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function logVisitorExit(visitorId) {
+  const { data, error } = await supabase
+    .from('visitors')
+    .update({
+      exit_time: new Date().toISOString(),
+      status: 'exited'
+    })
+    .eq('id', visitorId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// Pre-approved Visitors
+export async function getApprovedVisitors(flatId) {
+  let query = supabase
+    .from('approved_visitors')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (flatId) {
+    query = query.eq('flat_id', flatId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function getSocietyApprovedVisitors(societyId) {
+  const { data: flats, error: flatsError } = await supabase
+    .from('flats')
+    .select('id')
+    .eq('society_id', societyId);
+  if (flatsError) throw flatsError;
+
+  const flatIds = (flats || []).map(f => f.id);
+  if (flatIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('approved_visitors')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .in('flat_id', flatIds)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function addApprovedVisitor(visitorData) {
+  const { data, error } = await supabase
+    .from('approved_visitors')
+    .insert({
+      flat_id: visitorData.flatId,
+      name: visitorData.name,
+      phone: visitorData.phone,
+      relation: visitorData.relation,
+      photo_url: visitorData.photoUrl || null,
+      valid_from: visitorData.validFrom || new Date().toISOString().split('T')[0],
+      valid_until: visitorData.validUntil || null,
+      is_active: true
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function toggleApprovedVisitor(id, isActive) {
+  const { data, error } = await supabase
+    .from('approved_visitors')
+    .update({ is_active: isActive })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// Daily Help
+export async function getDailyHelp(flatId) {
+  let query = supabase
+    .from('daily_help')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (flatId) {
+    query = query.eq('flat_id', flatId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function getSocietyDailyHelp(societyId) {
+  const { data: flats, error: flatsError } = await supabase
+    .from('flats')
+    .select('id')
+    .eq('society_id', societyId);
+  if (flatsError) throw flatsError;
+
+  const flatIds = (flats || []).map(f => f.id);
+  if (flatIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('daily_help')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .in('flat_id', flatIds)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function addDailyHelp(helpData) {
+  const { data, error } = await supabase
+    .from('daily_help')
+    .insert({
+      flat_id: helpData.flatId,
+      name: helpData.name,
+      phone: helpData.phone,
+      role: helpData.role,
+      working_days: helpData.workingDays || [],
+      is_active: true
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getHelpAttendance(helpId) {
+  const { data, error } = await supabase
+    .from('help_attendance')
+    .select('*')
+    .eq('help_id', helpId)
+    .order('date', { ascending: false })
+    .order('in_time', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getSocietyHelpAttendance(societyId) {
+  const { data: helps, error: helpError } = await getSocietyDailyHelp(societyId);
+
+  const helpIds = (helps || []).map(h => h.id);
+  if (helpIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('help_attendance')
+    .select(`
+      *,
+      daily_help!help_attendance_help_id_fkey(name, role, flat:flats(wing, flat_number))
+    `)
+    .in('help_id', helpIds)
+    .order('date', { ascending: false })
+    .order('in_time', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function markHelpAttendance(helpId, type, attendanceId = null) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const markedBy = user ? user.id : null;
+
+  if (type === 'IN') {
+    const { data, error } = await supabase
+      .from('help_attendance')
+      .insert({
+        help_id: helpId,
+        date: new Date().toISOString().split('T')[0],
+        in_time: new Date().toISOString(),
+        marked_by: markedBy
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } else {
+    const { data, error } = await supabase
+      .from('help_attendance')
+      .update({
+        out_time: new Date().toISOString(),
+        marked_by: markedBy
+      })
+      .eq('id', attendanceId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+}
+
+// Deliveries
+export async function getDeliveries(flatId) {
+  let query = supabase
+    .from('deliveries')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .order('logged_at', { ascending: false });
+
+  if (flatId) {
+    query = query.eq('flat_id', flatId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function getSocietyDeliveries(societyId) {
+  const { data, error } = await supabase
+    .from('deliveries')
+    .select(`
+      *,
+      flat:flats(wing, flat_number)
+    `)
+    .eq('society_id', societyId)
+    .order('logged_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function logDelivery(deliveryData) {
+  const { data, error } = await supabase
+    .from('deliveries')
+    .insert({
+      society_id: deliveryData.societyId,
+      flat_id: deliveryData.flatId,
+      courier_name: deliveryData.courierName,
+      description: deliveryData.description || null,
+      status: 'pending'
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function markDeliveryCollected(deliveryId) {
+  const { data, error } = await supabase
+    .from('deliveries')
+    .update({
+      status: 'collected',
+      collected_at: new Date().toISOString()
+    })
+    .eq('id', deliveryId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// Gate Passes
+export async function getGatePasses(flatId) {
+  let query = supabase
+    .from('gate_passes')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (flatId) {
+    query = query.eq('flat_id', flatId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function createGatePass(passData) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const createdBy = user ? user.id : null;
+
+  const { data, error } = await supabase
+    .from('gate_passes')
+    .insert({
+      flat_id: passData.flatId,
+      visitor_name: passData.visitorName,
+      valid_from: passData.validFrom,
+      valid_until: passData.validUntil,
+      otp_code: passData.otpCode,
+      is_used: false,
+      created_by: createdBy
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function verifyAndUseGatePass(otpCode) {
+  const { data: pass, error: fetchError } = await supabase
+    .from('gate_passes')
+    .select(`
+      *,
+      flat:flats(wing, flat_number, society_id)
+    `)
+    .eq('otp_code', otpCode)
+    .maybeSingle();
+
+  if (fetchError) throw fetchError;
+  if (!pass) throw new Error('Invalid Gate Pass OTP');
+  if (pass.is_used) throw new Error('Gate Pass has already been used');
+  
+  const now = new Date();
+  if (now < new Date(pass.valid_from) || now > new Date(pass.valid_until)) {
+    throw new Error('Gate Pass is outside its valid time window');
+  }
+
+  const { data, error: updateError } = await supabase
+    .from('gate_passes')
+    .update({ is_used: true })
+    .eq('id', pass.id)
+    .select()
+    .single();
+
+  if (updateError) throw updateError;
+  return { ...data, flat: pass.flat };
+}
+
+// SOS Alerts
+export async function triggerSOS(flatId) {
+  const { data, error } = await supabase
+    .from('sos_alerts')
+    .insert({
+      flat_id: flatId,
+      status: 'active'
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getActiveSOSAlerts(societyId) {
+  const { data: flats, error: flatsError } = await supabase
+    .from('flats')
+    .select('id')
+    .eq('society_id', societyId);
+  if (flatsError) throw flatsError;
+
+  const flatIds = (flats || []).map(f => f.id);
+  if (flatIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('sos_alerts')
+    .select(`
+      *,
+      flat:flats(wing, flat_number, owner:profiles(name, phone))
+    `)
+    .in('flat_id', flatIds)
+    .eq('status', 'active')
+    .order('triggered_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getAllSOSAlerts(societyId) {
+  const { data: flats, error: flatsError } = await supabase
+    .from('flats')
+    .select('id')
+    .eq('society_id', societyId);
+  if (flatsError) throw flatsError;
+
+  const flatIds = (flats || []).map(f => f.id);
+  if (flatIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('sos_alerts')
+    .select(`
+      *,
+      flat:flats(wing, flat_number, owner:profiles(name, phone)),
+      resolver:profiles!sos_alerts_resolved_by_fkey(name)
+    `)
+    .in('flat_id', flatIds)
+    .order('triggered_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function resolveSOSAlert(alertId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const resolverId = user ? user.id : null;
+
+  const { data, error } = await supabase
+    .from('sos_alerts')
+    .update({
+      status: 'resolved',
+      resolved_by: resolverId,
+      resolved_at: new Date().toISOString()
+    })
+    .eq('id', alertId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function createUrgentBroadcast({ societyId, title, content, category }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('notices')
+    .insert({
+      society_id: societyId,
+      title,
+      content,
+      posted_by: user.id,
+      is_urgent: true,
+      category: category || 'emergency'
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function createAdvancePaymentOrder(advanceMonths, paymentMode = 'card') {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
+  const response = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment-order`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ advanceMonths, paymentMode }),
+    }
+  );
+
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Advance payment order failed');
+  return result;
+}
+

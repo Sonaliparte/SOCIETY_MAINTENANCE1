@@ -7,6 +7,32 @@ export default {
   theme: {
     extend: {
       colors: {
+        sky: {
+          50: '#eef8ff',
+          100: '#d9efff',
+          200: '#bce2ff',
+          300: '#8ecfff',
+          400: '#00e5ff', 
+          500: '#0066ff', 
+          600: '#0052cc', 
+          700: '#004099',
+          800: '#003380',
+          900: '#002966',
+          950: '#001a4d',
+        },
+        slate: {
+          50: '#f8fafc',
+          100: '#f1f5f9',
+          200: '#e2e8f0',
+          300: '#cbd5e1',
+          400: '#94a3b8',
+          500: '#64748b',
+          600: '#475569',
+          700: '#334155',
+          800: '#1e293b',
+          900: '#0b1120',
+          950: '#060a14',
+        },
         primary: {
           50: '#f8fafc',
           100: '#f1f5f9',
@@ -21,9 +47,9 @@ export default {
           950: '#020617',
         },
         brand: {
-          DEFAULT: '#0284c7', // Sky 600
-          light: '#e0f2fe',
-          dark: '#0369a1',
+          DEFAULT: '#0066ff', // Royal Blue
+          light: '#00e5ff',   // Cyan
+          dark: '#0052cc',
         },
         success: {
           DEFAULT: '#10b981', // Emerald 500

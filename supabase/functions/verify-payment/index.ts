@@ -38,9 +38,11 @@ serve(async (req) => {
       });
     }
 
-    const { sessionId, billId, paymentMode } = await req.json();
-    if (!sessionId || !billId) {
-      return new Response(JSON.stringify({ error: "Session ID and Bill ID are required" }), {
+    const { sessionId, billId, billIds, paymentMode } = await req.json();
+    const finalBillIds = billIds || (billId ? [billId] : []);
+
+    if (!sessionId || finalBillIds.length === 0) {
+      return new Response(JSON.stringify({ error: "Session ID and Bill ID(s) are required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -56,13 +58,12 @@ serve(async (req) => {
     const { data: existingPayment } = await supabaseAdmin
       .from("payments")
       .select("*")
-      .eq("transaction_id", sessionId)
-      .maybeSingle();
+      .eq("transaction_id", sessionId);
 
-    if (existingPayment && existingPayment.status === "success") {
+    if (existingPayment && existingPayment.length > 0 && existingPayment.every(p => p.status === "success")) {
       return new Response(JSON.stringify({
         message: "Payment already processed",
-        payment: existingPayment
+        payments: existingPayment
       }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -70,7 +71,7 @@ serve(async (req) => {
     }
 
     // Fetch bill details
-    const { data: bill, error: billError } = await supabaseAdmin
+    const { data: bills, error: billsError } = await supabaseAdmin
       .from("bills")
       .select(`
         id,
@@ -89,11 +90,10 @@ serve(async (req) => {
           owner:profiles(name, email, phone)
         )
       `)
-      .eq("id", billId)
-      .single();
+      .in("id", finalBillIds);
 
-    if (billError || !bill) {
-      return new Response(JSON.stringify({ error: "Associated bill not found" }), {
+    if (billsError || !bills || bills.length === 0) {
+      return new Response(JSON.stringify({ error: "Associated bills not found" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -102,7 +102,6 @@ serve(async (req) => {
     const isMock = sessionId.startsWith("mock_session_");
     let transactionVerified = false;
     let finalTxId = sessionId;
-    const totalAmount = Number(bill.amount) + Number(bill.penalty);
 
     if (isMock) {
       transactionVerified = true;
@@ -136,229 +135,257 @@ serve(async (req) => {
       });
     }
 
-    // Update Bill Status
-    const { error: billUpdateError } = await supabaseAdmin
-      .from("bills")
-      .update({ status: "paid" })
-      .eq("id", billId);
+    const processedPayments = [];
+    const emailAttachments = [];
 
-    if (billUpdateError) {
-      throw new Error(`Failed to update bill status: ${billUpdateError.message}`);
-    }
+    for (const bill of bills) {
+      // Update Bill Status
+      const { error: billUpdateError } = await supabaseAdmin
+        .from("bills")
+        .update({ status: "paid" })
+        .eq("id", bill.id);
 
-    // Generate Payment Record placeholder
-    const { data: payment, error: paymentError } = await supabaseAdmin
-      .from("payments")
-      .insert({
-        bill_id: billId,
-        flat_id: bill.flat.id,
-        amount: totalAmount,
-        payment_mode: paymentMode || "card",
-        transaction_id: finalTxId,
-        status: "success",
-      })
-      .select()
-      .single();
+      if (billUpdateError) {
+        throw new Error(`Failed to update bill status: ${billUpdateError.message}`);
+      }
 
-    if (paymentError || !payment) {
-      throw new Error(`Failed to log payment record: ${paymentError?.message}`);
-    }
+      const totalAmount = Number(bill.amount) + Number(bill.penalty);
 
-    // --- RECEIPT PDF GENERATION (pdf-lib) ---
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([595.28, 841.89]); // A4 Page size
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      // Generate Payment Record placeholder
+      const { data: payment, error: paymentError } = await supabaseAdmin
+        .from("payments")
+        .insert({
+          bill_id: bill.id,
+          flat_id: bill.flat.id,
+          amount: totalAmount,
+          payment_mode: paymentMode || "card",
+          transaction_id: finalTxId,
+          status: "success",
+        })
+        .select()
+        .single();
 
-    const primaryColor = rgb(30/255, 41/255, 59/255); // Slate 800
-    const secondaryColor = rgb(2/255, 132/255, 199/255); // Sky 600
-    const textColor = rgb(51/255, 65/255, 85/255); // Slate 700
-    const lightText = rgb(100/255, 116/255, 139/255); // Slate 500
+      if (paymentError || !payment) {
+        throw new Error(`Failed to log payment record: ${paymentError?.message}`);
+      }
 
-    const societyName = bill.flat?.society?.name || "SOCIETY MAINTENANCE MANAGER";
-    const societyAddress = bill.flat?.society?.address || "";
-    const flatOwnerName = bill.flat?.owner?.name || "Resident";
-    const flatOwnerEmail = bill.flat?.owner?.email || user.email || "";
-    const flatOwnerPhone = bill.flat?.owner?.phone || "—";
-    const wingUnit = `Wing ${bill.flat?.wing} - Unit ${bill.flat?.flat_number} (${bill.flat?.flat_type})`;
+      // --- RECEIPT PDF GENERATION (pdf-lib) ---
+      const pdfDoc = await PDFDocument.create();
+      const page = pdfDoc.addPage([595.28, 841.89]); // A4 Page size
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-    // Top Header Banner
-    page.drawRectangle({
-      x: 0,
-      y: 841.89 - 15,
-      width: 595.28,
-      height: 15,
-      color: secondaryColor,
-    });
+      const primaryColor = rgb(30/255, 41/255, 59/255); // Slate 800
+      const secondaryColor = rgb(2/255, 132/255, 199/255); // Sky 600
+      const textColor = rgb(51/255, 65/255, 85/255); // Slate 700
+      const lightText = rgb(100/255, 116/255, 139/255); // Slate 500
 
-    // Society Title
-    page.drawText(societyName.toUpperCase(), {
-      x: 50,
-      y: 770,
-      size: 20,
-      font: boldFont,
-      color: primaryColor,
-    });
+      const societyName = bill.flat?.society?.name || "SOCIETY MAINTENANCE MANAGER";
+      const societyAddress = bill.flat?.society?.address || "";
+      const flatOwnerName = bill.flat?.owner?.name || "Resident";
+      const flatOwnerEmail = bill.flat?.owner?.email || user.email || "";
+      const flatOwnerPhone = bill.flat?.owner?.phone || "—";
+      const wingUnit = `Wing ${bill.flat?.wing} - Unit ${bill.flat?.flat_number} (${bill.flat?.flat_type})`;
 
-    // Address
-    page.drawText(societyAddress, {
-      x: 50,
-      y: 745,
-      size: 9,
-      font: font,
-      color: lightText,
-      maxWidth: 320,
-      lineHeight: 12,
-    });
-
-    // Receipt Badge Box
-    page.drawRectangle({
-      x: 400,
-      y: 725,
-      width: 145,
-      height: 65,
-      color: rgb(248/255, 250/255, 252/255),
-      borderColor: rgb(226/255, 232/255, 240/255),
-      borderWidth: 1,
-    });
-
-    page.drawText("MAINTENANCE", {
-      x: 412,
-      y: 768,
-      size: 11,
-      font: boldFont,
-      color: primaryColor,
-    });
-    page.drawText("RECEIPT", {
-      x: 412,
-      y: 752,
-      size: 11,
-      font: boldFont,
-      color: primaryColor,
-    });
-    page.drawText(`No: ${finalTxId.substring(0, 12).toUpperCase()}`, {
-      x: 412,
-      y: 737,
-      size: 7.5,
-      font: font,
-      color: lightText,
-    });
-
-    // Horizontal Rule
-    page.drawLine({
-      start: { x: 50, y: 700 },
-      end: { x: 545, y: 700 },
-      color: rgb(226/255, 232/255, 240/255),
-      thickness: 1,
-    });
-
-    // Two Column Metadata layout
-    // Col 1: Issued To
-    page.drawText("Issued To:", { x: 50, y: 670, size: 10, font: boldFont, color: primaryColor });
-    page.drawText(flatOwnerName, { x: 50, y: 652, size: 10, font: font, color: textColor });
-    page.drawText(`Flat: ${wingUnit}`, { x: 50, y: 637, size: 9, font: font, color: lightText });
-    page.drawText(`Email: ${flatOwnerEmail}`, { x: 50, y: 622, size: 9, font: font, color: lightText });
-    page.drawText(`Phone: ${flatOwnerPhone}`, { x: 50, y: 607, size: 9, font: font, color: lightText });
-
-    // Col 2: Transaction Details
-    page.drawText("Transaction Details:", { x: 350, y: 670, size: 10, font: boldFont, color: primaryColor });
-    page.drawText(`Billing Month: ${bill.billing_month}`, { x: 350, y: 652, size: 10, font: font, color: textColor });
-    page.drawText(`Payment Date: ${new Date().toLocaleDateString("en-IN", { dateStyle: "long" })}`, { x: 350, y: 637, size: 9, font: font, color: lightText });
-    page.drawText(`Payment Mode: ${(paymentMode || "card").toUpperCase()}`, { x: 350, y: 622, size: 9, font: font, color: lightText });
-    page.drawText(`Tx ID: ${finalTxId}`, { x: 350, y: 607, size: 9, font: font, color: lightText });
-
-    // Table Header Box
-    page.drawRectangle({
-      x: 50,
-      y: 540,
-      width: 495,
-      height: 25,
-      color: primaryColor,
-    });
-
-    page.drawText("Description", { x: 60, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
-    page.drawText("Billing Cycle", { x: 260, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
-    page.drawText("Late Penalty", { x: 370, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
-    page.drawText("Amount (INR)", { x: 470, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
-
-    // Table Row Box
-    page.drawRectangle({
-      x: 50,
-      y: 495,
-      width: 495,
-      height: 45,
-      color: rgb(248/255, 250/255, 252/255),
-      borderColor: rgb(226/255, 232/255, 240/255),
-      borderWidth: 1,
-    });
-
-    page.drawText("Society Maintenance Charges", { x: 60, y: 512, size: 9, font: font, color: textColor });
-    page.drawText(bill.billing_month, { x: 260, y: 512, size: 9, font: font, color: textColor });
-    page.drawText(`Rs. ${Number(bill.penalty).toFixed(2)}`, { x: 370, y: 512, size: 9, font: font, color: textColor });
-    page.drawText(`Rs. ${Number(bill.amount).toFixed(2)}`, { x: 470, y: 512, size: 9, font: font, color: textColor });
-
-    // Total section
-    page.drawText("Total Paid:", { x: 370, y: 460, size: 10, font: boldFont, color: primaryColor });
-    page.drawText(`Rs. ${totalAmount.toFixed(2)}`, {
-      x: 470,
-      y: 458,
-      size: 13,
-      font: boldFont,
-      color: secondaryColor,
-    });
-
-    // Info footer note
-    page.drawText("* Generated electronically. No signature required.", {
-      x: 50,
-      y: 400,
-      size: 8,
-      font: font,
-      color: lightText,
-    });
-
-    page.drawLine({
-      start: { x: 50, y: 100 },
-      end: { x: 545, y: 100 },
-      color: rgb(226/255, 232/255, 240/255),
-      thickness: 1,
-    });
-
-    page.drawText("Thank you for your prompt maintenance payment. It helps keep our society clean, secure, and beautiful!", {
-      x: 50,
-      y: 75,
-      size: 8.5,
-      font: font,
-      color: lightText,
-      maxWidth: 495,
-    });
-
-    const pdfBytes = await pdfDoc.save();
-
-    // Upload PDF to Supabase Storage
-    const receiptPath = `Receipt_${payment.id}.pdf`;
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("receipts")
-      .upload(receiptPath, pdfBytes, {
-        contentType: "application/pdf",
-        upsert: true,
+      // Top Header Banner
+      page.drawRectangle({
+        x: 0,
+        y: 841.89 - 15,
+        width: 595.28,
+        height: 15,
+        color: secondaryColor,
       });
 
-    if (uploadError) {
-      console.error(`Storage Upload Error: ${uploadError.message}`);
-    } else {
-      // Update Payment Record with Receipt URL
-      await supabaseAdmin
-        .from("payments")
-        .update({ receipt_url: `receipts/${receiptPath}` })
-        .eq("id", payment.id);
+      // Society Title
+      page.drawText(societyName.toUpperCase(), {
+        x: 50,
+        y: 770,
+        size: 18,
+        font: boldFont,
+        color: primaryColor,
+      });
+
+      // Address
+      page.drawText(societyAddress, {
+        x: 50,
+        y: 745,
+        size: 9,
+        font: font,
+        color: lightText,
+        maxWidth: 320,
+        lineHeight: 12,
+      });
+
+      // Receipt Badge Box
+      page.drawRectangle({
+        x: 400,
+        y: 725,
+        width: 145,
+        height: 65,
+        color: rgb(248/255, 250/255, 252/255),
+        borderColor: rgb(226/255, 232/255, 240/255),
+        borderWidth: 1,
+      });
+
+      page.drawText("MAINTENANCE", {
+        x: 412,
+        y: 768,
+        size: 11,
+        font: boldFont,
+        color: primaryColor,
+      });
+      page.drawText("RECEIPT", {
+        x: 412,
+        y: 752,
+        size: 11,
+        font: boldFont,
+        color: primaryColor,
+      });
+      page.drawText(`No: ${finalTxId.substring(0, 12).toUpperCase()}`, {
+        x: 412,
+        y: 737,
+        size: 7.5,
+        font: font,
+        color: lightText,
+      });
+
+      // Horizontal Rule
+      page.drawLine({
+        start: { x: 50, y: 700 },
+        end: { x: 545, y: 700 },
+        color: rgb(226/255, 232/255, 240/255),
+        thickness: 1,
+      });
+
+      // Two Column Metadata layout
+      page.drawText("Issued To:", { x: 50, y: 670, size: 10, font: boldFont, color: primaryColor });
+      page.drawText(flatOwnerName, { x: 50, y: 652, size: 10, font: font, color: textColor });
+      page.drawText(`Flat: ${wingUnit}`, { x: 50, y: 637, size: 9, font: font, color: lightText });
+      page.drawText(`Email: ${flatOwnerEmail}`, { x: 50, y: 622, size: 9, font: font, color: lightText });
+      page.drawText(`Phone: ${flatOwnerPhone}`, { x: 50, y: 607, size: 9, font: font, color: lightText });
+
+      page.drawText("Transaction Details:", { x: 350, y: 670, size: 10, font: boldFont, color: primaryColor });
+      page.drawText(`Billing Month: ${bill.billing_month}`, { x: 350, y: 652, size: 10, font: font, color: textColor });
+      page.drawText(`Payment Date: ${new Date().toLocaleDateString("en-IN", { dateStyle: "long" })}`, { x: 350, y: 637, size: 9, font: font, color: lightText });
+      page.drawText(`Payment Mode: ${(paymentMode || "card").toUpperCase()}`, { x: 350, y: 622, size: 9, font: font, color: lightText });
+      page.drawText(`Tx ID: ${finalTxId}`, { x: 350, y: 607, size: 9, font: font, color: lightText });
+
+      // Table Header Box
+      page.drawRectangle({
+        x: 50,
+        y: 540,
+        width: 495,
+        height: 25,
+        color: primaryColor,
+      });
+
+      page.drawText("Description", { x: 60, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
+      page.drawText("Billing Cycle", { x: 260, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
+      page.drawText("Late Penalty", { x: 370, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
+      page.drawText("Amount (INR)", { x: 470, y: 548, size: 9, font: boldFont, color: rgb(1,1,1) });
+
+      // Table Row Box
+      page.drawRectangle({
+        x: 50,
+        y: 495,
+        width: 495,
+        height: 45,
+        color: rgb(248/255, 250/255, 252/255),
+        borderColor: rgb(226/255, 232/255, 240/255),
+        borderWidth: 1,
+      });
+
+      page.drawText("Society Maintenance Charges", { x: 60, y: 512, size: 9, font: font, color: textColor });
+      page.drawText(bill.billing_month, { x: 260, y: 512, size: 9, font: font, color: textColor });
+      page.drawText(`Rs. ${Number(bill.penalty).toFixed(2)}`, { x: 370, y: 512, size: 9, font: font, color: textColor });
+      page.drawText(`Rs. ${Number(bill.amount).toFixed(2)}`, { x: 470, y: 512, size: 9, font: font, color: textColor });
+
+      // Total section
+      page.drawText("Total Paid:", { x: 370, y: 460, size: 10, font: boldFont, color: primaryColor });
+      page.drawText(`Rs. ${totalAmount.toFixed(2)}`, {
+        x: 470,
+        y: 458,
+        size: 13,
+        font: boldFont,
+        color: secondaryColor,
+      });
+
+      // Info footer note
+      page.drawText("* Generated electronically. No signature required.", {
+        x: 50,
+        y: 400,
+        size: 8,
+        font: font,
+        color: lightText,
+      });
+
+      page.drawLine({
+        start: { x: 50, y: 100 },
+        end: { x: 545, y: 100 },
+        color: rgb(226/255, 232/255, 240/255),
+        thickness: 1,
+      });
+
+      page.drawText("Thank you for your prompt maintenance payment. It helps keep our society clean, secure, and beautiful!", {
+        x: 50,
+        y: 75,
+        size: 8.5,
+        font: font,
+        color: lightText,
+        maxWidth: 495,
+      });
+
+      const pdfBytes = await pdfDoc.save();
+
+      // Upload PDF to Supabase Storage
+      const receiptPath = `Receipt_${payment.id}.pdf`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from("receipts")
+        .upload(receiptPath, pdfBytes, {
+          contentType: "application/pdf",
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error(`Storage Upload Error: ${uploadError.message}`);
+      } else {
+        // Update Payment Record with Receipt URL
+        const { data: updatedPayment } = await supabaseAdmin
+          .from("payments")
+          .update({ receipt_url: `receipts/${receiptPath}` })
+          .eq("id", payment.id)
+          .select()
+          .single();
+        
+        if (updatedPayment) {
+          processedPayments.push(updatedPayment);
+        }
+      }
+
+      // Add as email attachment
+      const base64Pdf = btoa(String.fromCharCode(...pdfBytes));
+      emailAttachments.push({
+        filename: `Receipt_${bill.billing_month}.pdf`,
+        content: base64Pdf,
+      });
     }
 
-    // --- TRIGGER EMAIL RECEIPTS (Resend) ---
+    // --- TRIGGER EMAIL RECEIPTS (Consolidated Resend) ---
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    const firstBill = bills[0];
+    const flatOwnerName = firstBill.flat?.owner?.name || "Resident";
+    const flatOwnerEmail = firstBill.flat?.owner?.email || user.email || "";
+    const totalPaidSum = bills.reduce((sum, b) => sum + Number(b.amount) + Number(b.penalty), 0);
+
     if (resendApiKey) {
       try {
-        const base64Pdf = btoa(String.fromCharCode(...pdfBytes));
         const fromEmail = Deno.env.get("SMTP_FROM") || "receipts@societymanager.local";
+        const billsSummaryRows = bills.map(b => `
+          <tr>
+            <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #475569;">${b.billing_month} Dues</td>
+            <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; text-align: right;">Rs. ${(Number(b.amount) + Number(b.penalty)).toFixed(2)}</td>
+          </tr>
+        `).join('');
 
         const emailHtml = `
           <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
@@ -376,23 +403,16 @@ serve(async (req) => {
               </tr>
               <tr>
                 <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #475569;">Flat Number</td>
-                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; text-align: right;">${bill.flat.wing} - ${bill.flat.flat_number}</td>
+                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; text-align: right;">${firstBill.flat.wing} - ${firstBill.flat.flat_number}</td>
               </tr>
-              <tr>
-                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #475569;">Billing Cycle</td>
-                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; text-align: right;">${bill.billing_month}</td>
-              </tr>
-              <tr>
-                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #475569;">Payment Method</td>
-                <td style="padding: 12px 15px; border-bottom: 1px solid #e2e8f0; text-align: right;">${(paymentMode || "card").toUpperCase()}</td>
-              </tr>
+              ${billsSummaryRows}
               <tr style="background-color: #f1f5f9;">
                 <td style="padding: 12px 15px; font-weight: bold; color: #0f172a; font-size: 16px;">Total Paid</td>
-                <td style="padding: 12px 15px; text-align: right; font-weight: bold; color: #0284c7; font-size: 16px;">Rs. ${totalAmount.toFixed(2)}</td>
+                <td style="padding: 12px 15px; text-align: right; font-weight: bold; color: #0284c7; font-size: 16px;">Rs. ${totalPaidSum.toFixed(2)}</td>
               </tr>
             </table>
 
-            <p>We have attached the official PDF receipt to this email for your records.</p>
+            <p>We have attached the official PDF receipt(s) to this email for your records.</p>
             
             <div style="margin-top: 30px; padding: 15px; background-color: #f0f9ff; border-radius: 6px; border-left: 4px solid #0284c7;">
               <p style="margin: 0; font-size: 13px; color: #0369a1;"><strong>Note:</strong> This is a system-generated email. Please do not reply directly to this message. For any queries regarding billing, contact the society office.</p>
@@ -411,14 +431,9 @@ serve(async (req) => {
           body: JSON.stringify({
             from: fromEmail,
             to: flatOwnerEmail,
-            subject: `Maintenance Payment Receipt - ${bill.billing_month} - Flat ${bill.flat.wing}-${bill.flat.flat_number}`,
+            subject: `Maintenance Payment Receipt - Flat ${firstBill.flat.wing}-${firstBill.flat.flat_number}`,
             html: emailHtml,
-            attachments: [
-              {
-                filename: `Receipt_${finalTxId.substring(0, 8)}.pdf`,
-                content: base64Pdf,
-              }
-            ]
+            attachments: emailAttachments
           }),
         });
 
@@ -428,15 +443,12 @@ serve(async (req) => {
         console.error(`Resend Email dispatch failure: ${emailErr.message}`);
       }
     } else {
-      console.log(`[MOCK EMAIL] Send receipt to ${flatOwnerEmail}. Amount: Rs. ${totalAmount.toFixed(2)}.`);
+      console.log(`[MOCK EMAIL] Send receipt to ${flatOwnerEmail}. Amount: Rs. ${totalPaidSum.toFixed(2)}.`);
     }
 
     return new Response(JSON.stringify({
       message: "Payment settled and receipt dispatched",
-      payment: {
-        ...payment,
-        receipt_url: `receipts/${receiptPath}`
-      }
+      payments: processedPayments
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

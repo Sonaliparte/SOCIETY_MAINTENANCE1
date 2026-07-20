@@ -1,5 +1,6 @@
 import React from 'react';
 import { Menu, Bell, User as UserIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const Navbar = ({ toggleSidebar }) => {
@@ -24,7 +25,7 @@ const Navbar = ({ toggleSidebar }) => {
         {/* Global branding context indicator */}
         <div className="hidden sm:flex sm:items-center sm:gap-2">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span className="text-sm font-medium text-slate-500"> Greenwood Residency Portal</span>
+          <span className="text-sm font-medium text-slate-500"> SecuriX Portal</span>
         </div>
       </div>
 
@@ -40,15 +41,22 @@ const Navbar = ({ toggleSidebar }) => {
           <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-sky-500"></span>
         </button>
 
-        {/* User Initials Circle */}
+        {/* User Profile Link */}
         <div className="flex items-center gap-3">
           <div className="hidden sm:block text-right">
             <div className="text-xs font-semibold text-slate-800 leading-tight">{user?.name}</div>
             <div className="text-[10px] text-slate-400 font-medium">ID: {user?.id.substring(0, 8).toUpperCase()}</div>
           </div>
-          <div className="flex h-9 w-9 items-center justify-between rounded-full bg-sky-100 text-sky-700 font-bold text-sm justify-center border border-sky-200 ring-2 ring-sky-50/50">
-            {getInitials(user?.name)}
-          </div>
+          <Link
+            to="/profile"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-100 text-sky-700 font-bold text-sm border border-sky-200 ring-2 ring-sky-50/50 hover:ring-sky-200 transition-all overflow-hidden"
+          >
+            {user?.photo ? (
+              <img src={user.photo} alt={user.name} className="h-full w-full object-cover" />
+            ) : (
+              getInitials(user?.name)
+            )}
+          </Link>
         </div>
       </div>
     </header>
